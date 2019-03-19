@@ -76,10 +76,10 @@ class CohortOutcomes:
     def __init__(self):
 
         self.survivalTimes = []    # survival times
+        self.nSurvivedBeyond5yr = 0  # number of patients survived beyond 5 years
         self.meanSurvivalTime = None   # mean survival times
+        self.propSurvivedBeyond5yar = 0
         self.nLivingPatients = None   # survival curve (sample path of number of alive patients over time)
-        self.countSurvival_list = []
-        self.percentageSurviveFive = None
 
     def extract_outcomes(self, simulated_patients):
         """ extracts outcomes of a simulated cohort
@@ -87,19 +87,18 @@ class CohortOutcomes:
 
         # record survival times
         for patient in simulated_patients:
-            if not (patient.survivalTime is None):
+            # if patient's survival time is observed, store it
+            if patient.survivalTime is not None:
                 self.survivalTimes.append(patient.survivalTime)
 
-        for k in self.survivalTimes:
-            if k > 5:
-                i=1
-                self.countSurvival_list.append(i)
-            else:
-                i=0
-                self.countSurvival_list.append(i)
+            # find if the patient survived beyond 5 years
+            # (note that if patient's survival time is not observed, the patient has survived beyond
+            # the simulation length)
+            if patient.survivalTime is None or patient.survivalTime > 5:
+                self.nSurvivedBeyond5yr += 1
 
         self.meanSurvivalTime = sum(self.survivalTimes)/len(self.survivalTimes)
-        self.percentageSurviveFive = sum(self.countSurvival_list)/len(self.countSurvival_list)
+        self.propSurvivedBeyond5yar = self.nSurvivedBeyond5yr/len(simulated_patients)
 
         # survival curve
         self.nLivingPatients = PathCls.PrevalencePathBatchUpdate(
@@ -108,93 +107,93 @@ class CohortOutcomes:
            times_of_changes=self.survivalTimes,
            increments=[-1]*len(self.survivalTimes))
 
-    def get_survival_time(self):
-        return self.survivalTimes
-
-    def get_ave_survival_time(self):
-        return self.meanSurvivalTime
-
-    def get_five_year_survival_list(self):
-        return self.countSurvival_list
-
-    def get_percentage_survive_five(self):
-        return self.percentageSurviveFive
-
-
 
 class MultiCohort:
+    """ simulates multiple cohorts with different parameters """
+
     def __init__(self, ids, pop_sizes, mortality_probs):
+        """
+        :param ids: (list) of ids for cohorts to simulate
+        :param pop_sizes: (list) of population sizes of cohorts to simulate
+        :param mortality_probs: (list) of the mortality probabilities
+        """
         self.ids = ids
         self.popSizes = pop_sizes
         self.mortalityProbs = mortality_probs
+        self.multiCohortOutcomes = MultiCohortOutcomes()
 
-        self.survivalTimes = []
-        self.meanSurvivalTimes = []
-        self.sumStat_meanSurvivalTimes = None
-
-        self.fiveYearSurvivals = []
-        self.probFiveYearSurvival = []
-        self.sumStat_probFiveYearSurvival = None
-
-    def simulate(self, n_steps):
+    def simulate(self, n_time_steps):
+        """ simulates all cohorts """
 
         for i in range(len(self.ids)):
-            cohort = Cohort(self.ids[i], self.popSizes[i],self.mortalityProbs[i])
-            cohort.simulate(n_steps)
 
-            self.survivalTimes.append(cohort.cohortOutcomes.get_survival_time())
-            self.meanSurvivalTimes.append(cohort.cohortOutcomes.get_ave_survival_time())
-            self.fiveYearSurvivals.append(cohort.cohortOutcomes.get_five_year_survival_list())
-            self.probFiveYearSurvival.append(cohort.cohortOutcomes.get_percentage_survive_five())
+            # create a cohort
+            cohort = Cohort(id=self.ids[i], pop_size=self.popSizes[i], mortality_prob=self.mortalityProbs[i])
 
-        self.sumStat_meanSurvivalTimes = Stat.SummaryStat('Mean Surviavl Time',self.meanSurvivalTimes)
-        self.sumStat_probFiveYearSurvival = Stat.SummaryStat('Five Year Survival', self.probFiveYearSurvival)
+            # simulate the cohort
+            cohort.simulate(n_time_steps=n_time_steps)
 
-    def get_cohort_mean_survival(self,cohort_index):
-        return self.meanSurvivalTimes[cohort_index]
+            # outcomes from simulating all cohorts
+            self.multiCohortOutcomes.extract_outcomes(simulated_cohort=cohort)
 
-    def get_cohort_CI_mean_surviavl(self, cohort_index, alpha):
-        st = Stat.SummaryStat('', self.survivalTimes[cohort_index])
-        return st.get_t_CI(alpha)
+        # calculate the summary statistics of from all cohorts
+        self.multiCohortOutcomes.calculate_summary_stats()
 
-    def get_cohort_prob_five_year_survival(self, cohort_index):
-        return self.probFiveYearSurvival[cohort_index]
 
-    def get_cohort_CI_prob_five_year_survival(self,cohort_index,alpha):
-        st2 = Stat.SummaryStat('',self.fiveYearSurvivals[cohort_index])
-        return st2.get_t_CI(alpha)
+class MultiCohortOutcomes:
+    def __init__(self):
 
-    def get_all_mean_survival(self):
-        return self.meanSurvivalTimes
+        self.survivalTimes = []  # two dimensional list of patient survival times from all simulated cohorts
+        self.meanSurvivalTimes = []  # list of average patient survival time for all simulated cohorts
+        self.probSurvivedBeyond5ry = []  # list of proportion of patients survived beyond 5yrs for all simulated cohorts
+        self.survivalCurves = []  # list of survival curves from all simulated cohorts
+        self.statMeanSurvivalTime = None  # summary statistics of mean survival time
 
-    def get_overall_mean_survival(self):
-        return self.sumStat_meanSurvivalTimes.get_mean()
+    def extract_outcomes(self, simulated_cohort):
+        """ extracts outcomes of a simulated cohort
+        :param simulated_cohort: a cohort after being simulated"""
 
-    def get_all_five_year_prob(self):
-        """ :returns a list of five year survival probability for all simulated cohorts"""
-        return self.probFiveYearSurvival
+        # store all patient survival times from this cohort
+        self.survivalTimes.append(simulated_cohort.cohortOutcomes.survivalTimes)
 
-    def get_overall_five_year_prob(self):
-        """ :returns the overall five year survival probability (the mean of the five year survival probabilities"""
-        return self.sumStat_probFiveYearSurvival.get_mean()
+        # store proportion of patients survived beyond 5 yrs
+        self.probSurvivedBeyond5ry.append(simulated_cohort.cohortOutcomes.propSurvivedBeyond5yar)
 
-    # Projection stats
+        # append the survival curve of this cohort
+        self.survivalCurves.append(simulated_cohort.cohortOutcomes.nLivingPatients)
+
+    def calculate_summary_stats(self):
+        """
+        calculate the summary statistics
+        """
+
+        # calculate average patient survival time for all simulated cohorts
+        for obs_set in self.survivalTimes:
+            self.meanSurvivalTimes.append(sum(obs_set)/len(obs_set))
+
+        # summary statistics of mean survival time
+        self.statMeanSurvivalTime = Stat.SummaryStat(name='Mean survival time',
+                                                     data=self.meanSurvivalTimes)
+
+    def get_cohort_CI_mean_survival(self, cohort_index, alpha):
+        """
+        :returns: the confidence interval of the mean survival time for a specified cohort
+        :param cohort_index: integer over [0, 1, ...] corresponding to the 1st, 2nd, ... simulated cohort
+        :param alpha: significance level
+        """
+
+        stat = Stat.SummaryStat(name='Summary statistics',
+                                data=self.survivalTimes[cohort_index])
+
+        return stat.get_t_CI(alpha=alpha)
+
     def get_cohort_PI_survival(self, cohort_index, alpha):
         """ :returns: the prediction interval of the survival time for a specified cohort
         :param cohort_index: integer over [0, 1, ...] corresponding to the 1st, 2ndm ... simulated cohort
         :param alpha: significance level
         """
-        st = Stat.SummaryStat('', self.survivalTimes[cohort_index])
-        return st.get_PI(alpha)
 
-    def get_PI_mean_survival(self, alpha):
-        """ :returns: the prediction interval of the mean survival time"""
-        return self.sumStat_meanSurvivalTimes.get_PI(alpha)
+        stat = Stat.SummaryStat(name='Summary statistics',
+                                data=self.survivalTimes[cohort_index])
 
-    def get_cohort_PI_five_year_prob(self, cohort_index, alpha):
-        st3 = Stat.SummaryStat('', self.probFiveYearSurvival[cohort_index])
-        return st3.get_PI(alpha)
-
-    def get_PI_five_year_prob(self,alpha):
-        return self.sumStat_probFiveYearSurvival.get_PI(alpha)
-
+        return stat.get_PI(alpha=alpha)

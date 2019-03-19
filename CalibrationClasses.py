@@ -11,123 +11,164 @@ import SimPy.FormatFunctions as FormatSupport
 class CalibrationColIndex(Enum):
     """ indices of columns in the calibration results cvs file  """
     ID = 0          # cohort ID
-    W = 1  # likelihood weight
+    W = 1           # likelihood weight
     MORT_PROB = 2   # mortality probability
+
 
 class Calibration:
     def __init__(self):
-        np.random.seed(1) #specifying the seed of random # generator
-        self.cohortIDs = range(CalibSets.POST_N)
-        self.mortalitySamples = []
-        self.mortalityResamples = []
-        self.weights = []
-        self.normalizedWeights = []
-        self.csvRows = [['Cohort ID', 'Likelihood Weights' ,'Mortality Prob']]  # list containing the calibration results
+        """ initializes the calibration object"""
 
-    def sample_posterior(self):
+        self.cohortIDs = []             # IDs of cohorts to simulate
+        self.mortalitySamples = []      # values of mortality probability at which the posterior should be sampled
+        self.normalizedWeights = []     # normalized likelihood weights (sums to 1)
+        self.mortalityResamples = []  # resampled values for constructing posterior estimate and interval
+
+    def sample_posterior(self, n_samples):
+        """ sample the posterior distribution of the mortality probability,
+         :param n_samples: number of samples from the posterior distribution
+         """
+
+        # specifying the seed of the numpy random number generator
+        np.random.seed(1)
+
+        # cohort ids
+        self.cohortIDs = range(n_samples)
+
+        # find values of mortality probability at which the posterior should be evaluated
         self.mortalitySamples = np.random.uniform(
-            low = CalibSets.POST_L,
-            high= CalibSets.POST_U,
-            size = CalibSets.POST_N
-        )
+            low=CalibSets.POST_L,
+            high=CalibSets.POST_U,
+            size=CalibSets.POST_N)
 
-        multiCohort = SurvivalCls.MultiCohort(
-            ids = self.cohortIDs,
-            mortality_probs = self.mortalitySamples,
-            pop_sizes = [CalibSets.SIM_POP_SIZE]*CalibSets.POST_N
+        # create a multi cohort
+        multi_cohort = SurvivalCls.MultiCohort(
+            ids=self.cohortIDs,
+            mortality_probs=self.mortalitySamples,
+            pop_sizes=[CalibSets.SIM_POP_SIZE]*CalibSets.POST_N
         )
 
         # simulate the multi cohort
-        multiCohort.simulate(CalibSets.TIME_STEPS)
+        multi_cohort.simulate(n_time_steps=CalibSets.TIME_STEPS)
 
-        #calculate the likelihood of each simulated cohort
+        # calculate the likelihood of each simulated cohort
+        weights = []
         for cohort_id in self.cohortIDs:
 
-            #get the 5-year survival probability for this cohort
-            proportion = multiCohort.get_cohort_prob_five_year_survival(cohort_id)
+            # get the 5-year survival probability for this cohort
+            proportion = multi_cohort.multiCohortOutcomes.probSurvivedBeyond5ry[cohort_id]
 
+            # construct a binomial likelihood
+            # with p calculated from the simulated data
+            # evaluate this pdf (probability density function) at the (k, n) reported in the clinical study.
             weight = stat.binom.pmf(
                 k=CalibSets.OBS_ALIVE,
                 n=CalibSets.OBS_N,
                 p=proportion,
-                loc = 0)
+                loc=0)
 
-            self.weights.append(weight)
+            # store the weight
+            weights.append(weight)
 
-        sum_weights = np.sum(self.weights)
-        self.normalizedWeights = np.divide(self.weights,sum_weights)
+        # normalize the likelihood weights
+        sum_weights = np.sum(weights)
+        self.normalizedWeights = np.divide(weights, sum_weights)
 
+        # produce the list to report the results
+        csv_rows = \
+            [['Cohort ID', 'Likelihood Weights', 'Mortality Prob']]  # list containing the calibration results
+        for i in range(len(self.mortalitySamples)):
+            csv_rows.append(
+                [self.cohortIDs[i], self.normalizedWeights[i], self.mortalitySamples[i]])
+
+        # write the calibration result into a csv file
+        InOutSupport.write_csv(
+            file_name='CalibrationResults.csv',
+            rows=csv_rows)
+
+        # re-sample mortality probability (with replacement) according to likelihood weights
         self.mortalityResamples = np.random.choice(
             a=self.mortalitySamples,
-            size = CalibSets.NUM_SIM_COHORTS,
-            replace = True,
+            size=n_samples,
+            replace=True,
             p=self.normalizedWeights)
 
-        for i in range(0, len(self.mortalitySamples)):
-            self.csvRows.append(
-                [self.cohortIDs[i],self.normalizedWeights[i],self.mortalitySamples[i]])
+    def get_mortality_estimate_credible_interval(self, alpha):
+        """
+        :param n_samples: number of resamples from parameter values
+        :param alpha: the significance level
+        :returns tuple (mean, [lower, upper]) of the posterior distribution"""
 
+        # calculate the credible interval
+        sum_stat = Stat.SummaryStat(name='Posterior samples',
+                                    data=self.mortalityResamples)
 
-        InOutSupport.write_csv('CalibrationResults.csv',self.csvRows)
+        estimate = sum_stat.get_mean()  # estimated mortality probability
+        credible_interval = sum_stat.get_PI(alpha=alpha)  # credible interval
 
-
-    def get_mortality_resamples(self):
-        return self.mortalityResamples
-
-
-    def get_mortality_estimate_credible_interval(self, alpha, deci):
-
-        sum_stat = Stat.SummaryStat('Posterior Samples',self.mortalityResamples)
-
-        estimate = sum_stat.get_mean()
-        credible_interval = sum_stat.get_PI(alpha)
-
-        return FormatSupport.format_estimate_interval(estimate, credible_interval, deci)
-
-    def get_effective_sample_size(self):
-        return 1 / np.sum(np.power(self.normalizedWeights,2))
+        return estimate, credible_interval
 
 
 class CalibratedModel:
-    def __init__(self, csv_file_name, drug_effectiveness_ratio=1):
+    """ to run the calibrated survival model """
 
+    def __init__(self, csv_file_name, drug_effectiveness_ratio=1):
+        """ extracts seeds, mortality probabilities and the associated likelihood from
+        the csv file where the calibration results are stored
+        :param csv_file_name: name of the csv file where the calibrated results are stored
+        :param drug_effectiveness_ratio: effectiveness of the drug
+        """
+
+        # read the columns of the csv files containing the calibration results
         cols = InOutSupport.read_csv_cols(
             file_name=csv_file_name,
             n_cols=3,
             if_ignore_first_row=True,
             if_convert_float=True)
 
+        # store likelihood weights, cohort IDs and sampled mortality probabilities
         self.cohortIDs = cols[CalibrationColIndex.ID.value].astype(int)
         self.weights = cols[CalibrationColIndex.W.value]
         self.mortalityProbs = cols[CalibrationColIndex.MORT_PROB.value] * drug_effectiveness_ratio
-        self.multiCohorts = None
+        self.multiCohorts = None  # multi-cohort
 
-    def simulate(self, num_of_simulated_cohorts, cohort_size,time_steps, cohort_ids=None):
-
-        #resample cohort IDs and mortality probabilities with replacement
+    def simulate(self, num_of_simulated_cohorts, cohort_size, time_steps, cohort_ids=None):
+        """ simulate the specified number of cohorts based on their associated likelihood weight
+        :param num_of_simulated_cohorts: number of cohorts to simulate
+        :param cohort_size: the population size of cohorts
+        :param time_steps: simulation length
+        :param cohort_ids: ids of cohort to simulate
+        """
+        # resample cohort IDs and mortality probabilities based on their likelihood weights
+        # sample (with replacement) from indices [0, 1, 2, ..., number of weights] based on the likelihood weights
         sampled_row_indices = np.random.choice(
-            a=range(0,len(self.weights)),
+            a=range(0, len(self.weights)),
             size=num_of_simulated_cohorts,
             replace=True,
             p=self.weights)
 
+        # use the sampled indices to populate the list of cohort IDs and mortality probabilities
         resampled_ids = []
-        resampled_prob = []
+        resampled_probs = []
         for i in sampled_row_indices:
             resampled_ids.append(self.cohortIDs[i])
-            resampled_prob.append(self.mortalityProbs[i])
+            resampled_probs.append(self.mortalityProbs[i])
 
+        # simulate the desired number of cohorts
         if cohort_ids is None:
+            # if cohort ids are not provided, use the ids stored in the calibration results
             self.multiCohorts = SurvivalCls.MultiCohort(
                 ids=resampled_ids,
-                pop_sizes=[cohort_size]*num_of_simulated_cohorts,
-                mortality_probs=resampled_prob)
+                pop_sizes=[cohort_size] * num_of_simulated_cohorts,
+                mortality_probs=resampled_probs)
         else:
+            # if cohort ids are provided, use them instead of the ids stored in the calibration results
             self.multiCohorts = SurvivalCls.MultiCohort(
-                ids = cohort_ids,
-                pop_sizes=[cohort_size]*num_of_simulated_cohorts,
-                mortality_probs=resampled_prob)
+                ids=cohort_ids,
+                pop_sizes=[cohort_size] * num_of_simulated_cohorts,
+                mortality_probs=resampled_probs)
 
+        # simulate all cohorts
         self.multiCohorts.simulate(time_steps)
 
     def get_mean_survival_time_proj_interval(self, alpha):
@@ -136,7 +177,8 @@ class CalibratedModel:
         :param deci: decimal places
         :returns tuple in the form of (mean, [lower, upper]) of projection interval
         """
-        mean = self.multiCohorts.sumStat_meanSurvivalTimes.get_mean()
-        proj_interval = self.multiCohorts.sumStat_meanSurvivalTimes.get_PI(alpha=alpha)
+
+        mean = self.multiCohorts.multiCohortOutcomes.statMeanSurvivalTime.get_mean()
+        proj_interval = self.multiCohorts.multiCohortOutcomes.statMeanSurvivalTime.get_PI(alpha=alpha)
 
         return mean, proj_interval

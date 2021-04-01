@@ -1,7 +1,7 @@
 from enum import Enum
 import numpy as np
-import SimPy.SamplePathClasses as PathCls
-import SimPy.StatisticalClasses as Stat
+import SimPy.SamplePath as PathCls
+import SimPy.Statistics as Stat
 
 
 class HealthStat(Enum):
@@ -17,7 +17,6 @@ class Patient:
         :param mortality_prob: probability of death during a time-step (must be in [0,1])
         """
         self.id = id
-        self.rng = None  # random number generator for this patient
         self.mortalityProb = mortality_prob
         self.healthState = HealthStat.ALIVE  # assuming all patients are alive at the beginning
         self.survivalTime = None  # won't be observed unless the patient dies
@@ -25,14 +24,14 @@ class Patient:
     def simulate(self, n_time_steps):
         """ simulate the patient over the specified simulation length """
 
-        self.rng = np.random.RandomState(seed=self.id)
+        rng = np.random.RandomState(seed=self.id)
 
         t = 0  # current time step
 
         # while the patient is alive and simulation length is not yet reached
         while self.healthState == HealthStat.ALIVE and t < n_time_steps:
             # determine if the patient will die during this time-step
-            if self.rng.random_sample() < self.mortalityProb:
+            if rng.random_sample() < self.mortalityProb:
                 # update the health state to death
                 self.healthState = HealthStat.DEAD
                 # record the survival time (assuming deaths occurs at the end of this period)

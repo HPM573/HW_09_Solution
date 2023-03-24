@@ -1,10 +1,11 @@
 from enum import Enum
+
+import deampy.statistics as stats
 import numpy as np
-import SimPy.SamplePath as PathCls
-import SimPy.Statistics as Stat
+from deampy.plots.sample_paths import PrevalencePathBatchUpdate
 
 
-class HealthStat(Enum):
+class HealthState(Enum):
     """ health status of patients  """
     ALIVE = 1
     DEAD = 0
@@ -18,27 +19,28 @@ class Patient:
         """
         self.id = id
         self.mortalityProb = mortality_prob
-        self.healthState = HealthStat.ALIVE  # assuming all patients are alive at the beginning
+        self.healthState = HealthState.ALIVE  # assuming all patients are alive at the beginning
         self.survivalTime = None  # won't be observed unless the patient dies
 
     def simulate(self, n_time_steps):
         """ simulate the patient over the specified simulation length """
 
+        # random number generator
         rng = np.random.RandomState(seed=self.id)
 
-        t = 0  # current time step
+        k = 1  # current simulation year
 
         # while the patient is alive and simulation length is not yet reached
-        while self.healthState == HealthStat.ALIVE and t < n_time_steps:
+        while self.healthState == HealthState.ALIVE and k < n_time_steps:
             # determine if the patient will die during this time-step
             if rng.random_sample() < self.mortalityProb:
                 # update the health state to death
-                self.healthState = HealthStat.DEAD
+                self.healthState = HealthState.DEAD
                 # record the survival time (assuming deaths occurs at the end of this period)
-                self.survivalTime = t + 1
+                self.survivalTime = k
 
             # increment time
-            t += 1
+            k += 1
 
 
 class Cohort:
@@ -49,33 +51,28 @@ class Cohort:
         :param mortality_prob: probability of death for each patient in this cohort over a time-step (must be in [0,1])
         """
         self.id = id
-        self.initialPopSize = pop_size  # initial population size
+        self.popSize = pop_size  # initial population size
         self.mortalityProb = mortality_prob
-        self.patients = []  # list of patients
-        self.cohortOutcomes = CohortOutcomes()  # outcomes of the this simulated cohort
+        self.cohortOutcomes = CohortOutcomes()  # outcomes of the simulated cohort
 
     def simulate(self, n_time_steps):
         """ simulate the cohort of patients over the specified number of time-steps
         :param n_time_steps: number of time steps to simulate the cohort
         """
 
-        # populate the cohort
-        for i in range(self.initialPopSize):
+        # populate and simulate the cohort
+        for i in range(self.popSize):
             # create a new patient (use id * pop_size + n as patient id)
-            patient = Patient(id=self.id * self.initialPopSize + i, mortality_prob=self.mortalityProb)
-            # add the patient to the cohort
-            self.patients.append(patient)
+            patient = Patient(id=self.id * self.popSize + i, mortality_prob=self.mortalityProb)
 
-        # simulate all patients
-        for patient in self.patients:
             # simulate
             patient.simulate(n_time_steps)
 
-        # store outputs of this simulation
-        self.cohortOutcomes.extract_outcomes(self.patients)
+            # store outputs of this simulation
+            self.cohortOutcomes.extract_outcome(patient)
 
-        # clear the patients
-        self.patients.clear()
+        # calculate cohort outcomes
+        self.cohortOutcomes.calculate_cohort_outcomes(initial_pop_size=self.popSize)
 
 
 class CohortOutcomes:
@@ -83,35 +80,41 @@ class CohortOutcomes:
 
         self.survivalTimes = []    # survival times
         self.nSurvivedBeyond5yr = 0  # number of patients survived beyond 5 years
-        self.meanSurvivalTime = None   # mean survival times
         self.propSurvivedBeyond5yar = 0
+        self.meanSurvivalTime = None   # mean survival time
         self.nLivingPatients = None   # survival curve (sample path of number of alive patients over time)
 
-    def extract_outcomes(self, simulated_patients):
-        """ extracts outcomes of a simulated cohort
-        :param simulated_patients: (list) of patients after being simulated """
+    def extract_outcome(self, simulated_patient):
+        """ extracts outcomes of a simulated patient
+        :param simulated_patient: a patient after being simulated """
 
         # record survival times
-        for patient in simulated_patients:
-            # if patient's survival time is observed, store it
-            if patient.survivalTime is not None:
-                self.survivalTimes.append(patient.survivalTime)
+        if simulated_patient.survivalTime is not None:
+            self.survivalTimes.append(simulated_patient.survivalTime)
 
-            # find if the patient survived beyond 5 years
-            # (note that if patient's survival time is not observed, the patient has survived beyond
-            # the simulation length)
-            if patient.survivalTime is None or patient.survivalTime > 5:
-                self.nSurvivedBeyond5yr += 1
+        # find if the patient survived beyond 5 years
+        # (note that if patient's survival time is not observed, the patient has survived beyond
+        # the simulation length)
+        if simulated_patient.survivalTime is None or simulated_patient.survivalTime > 5:
+            self.nSurvivedBeyond5yr += 1
 
+    def calculate_cohort_outcomes(self, initial_pop_size):
+        """ calculates the cohort outcomes
+        :param initial_pop_size: initial population size
+        """
+
+        # calculate mean survival time
         self.meanSurvivalTime = sum(self.survivalTimes)/len(self.survivalTimes)
-        self.propSurvivedBeyond5yar = self.nSurvivedBeyond5yr/len(simulated_patients)
+
+        self.propSurvivedBeyond5yar = self.nSurvivedBeyond5yr / initial_pop_size
 
         # survival curve
-        self.nLivingPatients = PathCls.PrevalencePathBatchUpdate(
-           name='# of living patients',
-           initial_size=len(simulated_patients),
-           times_of_changes=self.survivalTimes,
-           increments=[-1]*len(self.survivalTimes))
+        self.nLivingPatients = PrevalencePathBatchUpdate(
+            name='# of living patients',
+            initial_size=initial_pop_size,
+            times_of_changes=self.survivalTimes,
+            increments=[-1]*len(self.survivalTimes)
+        )
 
 
 class MultiCohort:
@@ -178,28 +181,6 @@ class MultiCohortOutcomes:
             self.meanSurvivalTimes.append(sum(obs_set)/len(obs_set))
 
         # summary statistics of mean survival time
-        self.statMeanSurvivalTime = Stat.SummaryStat(name='Mean survival time',
-                                                     data=self.meanSurvivalTimes)
+        self.statMeanSurvivalTime = stats.SummaryStat(name='Mean survival time',
+                                                      data=self.meanSurvivalTimes)
 
-    def get_cohort_CI_mean_survival(self, cohort_index, alpha):
-        """
-        :returns: the confidence interval of the mean survival time for a specified cohort
-        :param cohort_index: integer over [0, 1, ...] corresponding to the 1st, 2nd, ... simulated cohort
-        :param alpha: significance level
-        """
-
-        stat = Stat.SummaryStat(name='Summary statistics',
-                                data=self.survivalTimes[cohort_index])
-
-        return stat.get_t_CI(alpha=alpha)
-
-    def get_cohort_PI_survival(self, cohort_index, alpha):
-        """ :returns: the prediction interval of the survival time for a specified cohort
-        :param cohort_index: integer over [0, 1, ...] corresponding to the 1st, 2ndm ... simulated cohort
-        :param alpha: significance level
-        """
-
-        stat = Stat.SummaryStat(name='Summary statistics',
-                                data=self.survivalTimes[cohort_index])
-
-        return stat.get_PI(alpha=alpha)

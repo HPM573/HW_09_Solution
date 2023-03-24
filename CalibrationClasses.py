@@ -1,10 +1,12 @@
 from enum import Enum
-import scipy.stats as stat
+
+import deampy.in_out_functions as IO
+import deampy.statistics as stats
 import numpy as np
-import SimPy.InOutFunctions as IO
-import SimPy.Statistics as Stat
-import SurvivalModelClasses as SurvivalCls
+import scipy.stats as stat
+
 import CalibrationSettings as Sets
+import SurvivalModelClasses as SurvivalCls
 
 
 class CalibrationColIndex(Enum):
@@ -165,8 +167,8 @@ class CalibratedModel:
         :returns tuple (mean, [lower, upper]) of the posterior distribution"""
 
         # calculate the credible interval
-        sum_stat = Stat.SummaryStat(name='Posterior samples',
-                                    data=self.resampledMortalityProb)
+        sum_stat = stats.SummaryStat(name='Posterior samples',
+                                     data=self.resampledMortalityProb)
 
         estimate = sum_stat.get_mean()  # estimated mortality probability
         credible_interval = sum_stat.get_PI(alpha=alpha)  # credible interval

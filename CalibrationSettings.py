@@ -11,5 +11,5 @@ OBS_ALPHA = 0.05   # significance level
 
 # how to sample the posterior distribution of annual mortality probability
 # minimum, maximum and the number of samples for the annual mortality probability
-POST_L, POST_U, POST_N = 0.05, 0.15, 250
+PRIOR_L, PRIOR_U, PRIOR_N = 0.05, 0.15, 250
 

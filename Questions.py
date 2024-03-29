@@ -1,7 +1,7 @@
 import scipy.stats as stat
+
 import CalibrationClasses as Cls
 import CalibrationSettings as Sets
-
 
 # Problem 2:
 print('Problem 2: A binomial distribution with q as the probability of success and N as the number of trials.')
@@ -15,7 +15,7 @@ print('Problem 3: The likelihood of the observed data:', weight)
 calibration = Cls.Calibration()
 
 # sample the posterior of the mortality probability
-calibration.sample_posterior(n_samples=Sets.POST_N)
+calibration.sample_posterior(n_samples=Sets.PRIOR_N)
 
 # Problem 5:
 # initialize and simulate a calibrated model
@@ -39,7 +39,7 @@ Sets.OBS_ALIVE = 800
 # create a calibration object
 calibration = Cls.Calibration()
 # sample the posterior of the mortality probability
-calibration.sample_posterior(n_samples=Sets.POST_N)
+calibration.sample_posterior(n_samples=Sets.PRIOR_N)
 
 # initialize and simulate a calibrated model
 calibrated_model = Cls.CalibratedModel(csv_file_name='CalibrationResults.csv')
